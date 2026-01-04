@@ -11,7 +11,7 @@ bash <(curl -s https://raw.githubusercontent.com/sherif1day-ux/Pterodactyl-Insta
 ```
 V2
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/sherif1day-ux/Pterodactyl-Installer/main/install.sh)
+bash <(curl -s https://raw.githubusercontent.com/sherif1day-ux/Pterodactyl-Installer/main/install-v2.sh)
 ```
 
 ## Fitur Tools :

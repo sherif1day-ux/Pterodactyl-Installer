@@ -7,7 +7,11 @@
 ## Command Install :
 
 ```bash
-
+bash <(curl -s https://raw.githubusercontent.com/sherif1day-ux/Pterodactyl-Installer/main/install.sh)
+```
+V2
+```bash
+bash <(curl -s https://raw.githubusercontent.com/sherif1day-ux/Pterodactyl-Installer/main/install.sh)
 ```
 
 ## Fitur Tools :

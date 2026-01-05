@@ -3,38 +3,45 @@ set -e
 
 clear
 echo "==============================================="
-echo "      REVIACYTL ONLY INSTALLER"
+echo "   REVIACYTL ONLY INSTALLER (FIXED VERSION)"
 echo "   REQUIRE: PTERODACTYL INSTALLED"
-echo "        HTTP ONLY • NO SSL"
+echo "   HTTP ONLY • NO SSL"
 echo "==============================================="
 echo
 
 # ================= ROOT CHECK =================
-if [ "$EUID" -ne 0 ]; then
-  echo "❌ Jalankan sebagai root"
+if [ "$(id -u)" -ne 0 ]; then
+  echo "❌ Jalankan script sebagai root"
   exit 1
 fi
 
 # ================= INPUT USER =================
 read -p "Direktori Pterodactyl [/var/www/pterodactyl]: " PANEL_DIR
-PANEL_DIR=${PANEL_DIR:-/var/www/pterodactyl}
+PANEL_DIR="${PANEL_DIR:-/var/www/pterodactyl}"
 
 read -p "Versi PHP (8.1 / 8.2) [8.2]: " PHP_VERSION
-PHP_VERSION=${PHP_VERSION:-8.2}
+PHP_VERSION="${PHP_VERSION:-8.2}"
+
+echo
 
 # ================= VALIDATION =================
-if [ ! -f "${PANEL_DIR}/artisan" ]; then
-  echo "❌ Pterodactyl tidak ditemukan di ${PANEL_DIR}"
-  echo "   Install Pterodactyl terlebih dahulu!"
+if [ ! -d "$PANEL_DIR" ]; then
+  echo "❌ Direktori tidak ditemukan: $PANEL_DIR"
   exit 1
 fi
 
-if [ ! -f "${PANEL_DIR}/config/pterodactyl.php" ]; then
-  echo "❌ Ini bukan instalasi Pterodactyl yang valid"
+if [ ! -f "$PANEL_DIR/artisan" ]; then
+  echo "❌ File artisan tidak ditemukan"
+  echo "   Ini bukan instalasi Pterodactyl"
   exit 1
 fi
 
-echo "✅ Pterodactyl terdeteksi"
+if [ ! -d "$PANEL_DIR/resources" ] || [ ! -d "$PANEL_DIR/public" ]; then
+  echo "❌ Struktur Pterodactyl tidak valid"
+  exit 1
+fi
+
+echo "✅ Pterodactyl terdeteksi di $PANEL_DIR"
 
 # ================= VARIABLE =================
 REVIACTYL_REPO="https://github.com/reviactyl/panel.git"
@@ -45,35 +52,38 @@ echo "📦 Pastikan dependency tersedia"
 apt update -y
 apt install -y git curl unzip zip nodejs npm build-essential
 
-npm install -g yarn
+if ! command -v yarn >/dev/null 2>&1; then
+  npm install -g yarn
+fi
 
 # ================= BACKUP =================
-echo "📁 Backup panel (resources & public)"
-mkdir -p ${BACKUP_DIR}
-cp -r ${PANEL_DIR}/resources ${BACKUP_DIR}/
-cp -r ${PANEL_DIR}/public ${BACKUP_DIR}/
-echo "✅ Backup tersimpan di ${BACKUP_DIR}"
+echo "📁 Backup resources & public"
+mkdir -p "$BACKUP_DIR"
+cp -r "$PANEL_DIR/resources" "$BACKUP_DIR/"
+cp -r "$PANEL_DIR/public" "$BACKUP_DIR/"
+echo "✅ Backup tersimpan di $BACKUP_DIR"
 
-# ================= INSTALL THEME =================
-echo "🎨 Install Reviactyl"
+# ================= INSTALL REVIACYTL =================
+echo "🎨 Download Reviactyl"
 cd /tmp
 rm -rf reviactyl
-git clone ${REVIACTYL_REPO} reviactyl
+git clone "$REVIACTYL_REPO" reviactyl
 
 echo "🎨 Replace resources"
-cp -r reviactyl/resources/* ${PANEL_DIR}/resources/
+cp -r reviactyl/resources/* "$PANEL_DIR/resources/"
 
 echo "🎨 Replace public assets"
-cp -r reviactyl/public/* ${PANEL_DIR}/public/
+cp -r reviactyl/public/* "$PANEL_DIR/public/"
 
 # ================= BUILD FRONTEND =================
 echo "🏗️ Build frontend"
-cd ${PANEL_DIR}
+cd "$PANEL_DIR"
+
 yarn install --production=false
 yarn build
 
-# ================= CACHE =================
-echo "🧹 Clear & optimize"
+# ================= CLEAR CACHE =================
+echo "🧹 Clear cache"
 php artisan view:clear
 php artisan config:clear
 php artisan route:clear
@@ -81,16 +91,18 @@ php artisan optimize:clear
 
 # ================= PERMISSION =================
 echo "🔐 Fix permission"
-chown -R www-data:www-data ${PANEL_DIR}
-chmod -R 755 ${PANEL_DIR}
+chown -R www-data:www-data "$PANEL_DIR"
+chmod -R 755 "$PANEL_DIR"
 
 # ================= SERVICE =================
-systemctl restart php${PHP_VERSION}-fpm || true
+if systemctl list-units --type=service | grep -q "php${PHP_VERSION}-fpm"; then
+  systemctl restart "php${PHP_VERSION}-fpm"
+fi
+
 systemctl restart redis-server || true
 
 echo
 echo "==============================================="
-echo "✅ REVIACYTL BERHASIL DIPASANG"
-echo "📌 Panel tetap Pterodactyl (theme only)"
-echo "🔒 SSL : DISABLED"
+echo "✅ REVIACYTL BERHASIL DIPASANG (FIXED)"
+echo "📌 Pterodactyl aman, theme aktif"
 echo "==============================================="

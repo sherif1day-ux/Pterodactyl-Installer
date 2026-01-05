@@ -1,0 +1,96 @@
+#!/bin/bash
+set -e
+
+clear
+echo "==============================================="
+echo "      REVIACYTL ONLY INSTALLER"
+echo "   REQUIRE: PTERODACTYL INSTALLED"
+echo "        HTTP ONLY • NO SSL"
+echo "==============================================="
+echo
+
+# ================= ROOT CHECK =================
+if [ "$EUID" -ne 0 ]; then
+  echo "❌ Jalankan sebagai root"
+  exit 1
+fi
+
+# ================= INPUT USER =================
+read -p "Direktori Pterodactyl [/var/www/pterodactyl]: " PANEL_DIR
+PANEL_DIR=${PANEL_DIR:-/var/www/pterodactyl}
+
+read -p "Versi PHP (8.1 / 8.2) [8.2]: " PHP_VERSION
+PHP_VERSION=${PHP_VERSION:-8.2}
+
+# ================= VALIDATION =================
+if [ ! -f "${PANEL_DIR}/artisan" ]; then
+  echo "❌ Pterodactyl tidak ditemukan di ${PANEL_DIR}"
+  echo "   Install Pterodactyl terlebih dahulu!"
+  exit 1
+fi
+
+if [ ! -f "${PANEL_DIR}/config/pterodactyl.php" ]; then
+  echo "❌ Ini bukan instalasi Pterodactyl yang valid"
+  exit 1
+fi
+
+echo "✅ Pterodactyl terdeteksi"
+
+# ================= VARIABLE =================
+REVIACTYL_REPO="https://github.com/reviactyl/panel.git"
+BACKUP_DIR="/root/backup-reviactyl-$(date +%Y%m%d%H%M)"
+
+# ================= DEPENDENCY =================
+echo "📦 Pastikan dependency tersedia"
+apt update -y
+apt install -y git curl unzip zip nodejs npm build-essential
+
+npm install -g yarn
+
+# ================= BACKUP =================
+echo "📁 Backup panel (resources & public)"
+mkdir -p ${BACKUP_DIR}
+cp -r ${PANEL_DIR}/resources ${BACKUP_DIR}/
+cp -r ${PANEL_DIR}/public ${BACKUP_DIR}/
+echo "✅ Backup tersimpan di ${BACKUP_DIR}"
+
+# ================= INSTALL THEME =================
+echo "🎨 Install Reviactyl"
+cd /tmp
+rm -rf reviactyl
+git clone ${REVIACTYL_REPO} reviactyl
+
+echo "🎨 Replace resources"
+cp -r reviactyl/resources/* ${PANEL_DIR}/resources/
+
+echo "🎨 Replace public assets"
+cp -r reviactyl/public/* ${PANEL_DIR}/public/
+
+# ================= BUILD FRONTEND =================
+echo "🏗️ Build frontend"
+cd ${PANEL_DIR}
+yarn install --production=false
+yarn build
+
+# ================= CACHE =================
+echo "🧹 Clear & optimize"
+php artisan view:clear
+php artisan config:clear
+php artisan route:clear
+php artisan optimize:clear
+
+# ================= PERMISSION =================
+echo "🔐 Fix permission"
+chown -R www-data:www-data ${PANEL_DIR}
+chmod -R 755 ${PANEL_DIR}
+
+# ================= SERVICE =================
+systemctl restart php${PHP_VERSION}-fpm || true
+systemctl restart redis-server || true
+
+echo
+echo "==============================================="
+echo "✅ REVIACYTL BERHASIL DIPASANG"
+echo "📌 Panel tetap Pterodactyl (theme only)"
+echo "🔒 SSL : DISABLED"
+echo "==============================================="

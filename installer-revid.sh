@@ -136,6 +136,26 @@ node_major_version() {
     node -p "process.versions.node.split('.')[0]" 2>/dev/null || true
 }
 
+node_major_from_version_string() {
+    local v="$1"
+    v="$(echo "$v" | sed -E 's/^[0-9]+://; s/[~+].*$//; s/[^0-9.].*$//')"
+    echo "${v%%.*}"
+}
+
+apt_candidate_node_major() {
+    local candidate major
+    candidate="$(apt-cache policy nodejs 2>/dev/null | awk '/Candidate:/{print $2}' | head -n 1)"
+    if [ -z "$candidate" ] || [ "$candidate" = "(none)" ]; then
+        return 1
+    fi
+    major="$(node_major_from_version_string "$candidate")"
+    if [ -n "$major" ]; then
+        echo "$major"
+        return 0
+    fi
+    return 1
+}
+
 install_nodejs_major() {
     local major="$1"
     curl -fsSL "https://deb.nodesource.com/setup_${major}.x" | bash -
@@ -149,15 +169,21 @@ ensure_supported_nodejs() {
     if [ -n "$current_major" ] && [ "$current_major" -ge 18 ]; then
         return
     fi
-    local majors=(20 18)
-    for m in "${majors[@]}"; do
-        if install_nodejs_major "$m" >/dev/null 2>&1; then
-            current_major="$(node_major_version)"
-            if [ -n "$current_major" ] && [ "$current_major" -ge 18 ]; then
-                return
-            fi
+
+    local repo_major
+    repo_major="$(apt_candidate_node_major || true)"
+    if [ -n "$repo_major" ] && [ "$repo_major" -ge 18 ]; then
+        apt-get update -y
+        apt_install nodejs
+        return
+    fi
+
+    if install_nodejs_major 18 >/dev/null 2>&1; then
+        current_major="$(node_major_version)"
+        if [ -n "$current_major" ] && [ "$current_major" -ge 18 ]; then
+            return
         fi
-    done
+    fi
     echo -e "${RED}[ERROR] Gagal memasang Node.js versi kompatibel (butuh >= 18).${NC}"
     exit 1
 }

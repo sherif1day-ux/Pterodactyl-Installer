@@ -60,26 +60,161 @@ read -s ADMIN_PASS
 
 echo -e "\n${GREEN}[+] Memulai Instalasi...${NC}"
 
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+ensure_debian_like() {
+    if [ ! -f /etc/os-release ]; then
+        echo -e "${RED}[ERROR] /etc/os-release tidak ditemukan.${NC}"
+        exit 1
+    fi
+    . /etc/os-release
+    if [ "$ID" != "ubuntu" ] && [ "$ID" != "debian" ]; then
+        echo -e "${RED}[ERROR] OS tidak didukung otomatis: ${ID}${NC}"
+        exit 1
+    fi
+}
+
+apt_install() {
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
+}
+
+ensure_packages() {
+    local missing=()
+    for pkg in "$@"; do
+        if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+            missing+=("$pkg")
+        fi
+    done
+    if [ "${#missing[@]}" -gt 0 ]; then
+        apt-get update -y
+        apt_install "${missing[@]}"
+    fi
+}
+
+ensure_service_started() {
+    local svc="$1"
+    systemctl enable --now "$svc" >/dev/null 2>&1 || systemctl start "$svc"
+}
+
+ensure_php_repo() {
+    ensure_debian_like
+    . /etc/os-release
+    if [ "$ID" = "ubuntu" ]; then
+        ensure_packages software-properties-common
+        LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
+        apt-get update -y
+        return
+    fi
+
+    ensure_packages lsb-release ca-certificates apt-transport-https gnupg
+    if [ ! -f /usr/share/keyrings/php-sury.gpg ]; then
+        curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/php-sury.gpg
+    fi
+    if [ ! -f /etc/apt/sources.list.d/php-sury.list ]; then
+        echo "deb [signed-by=/usr/share/keyrings/php-sury.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/php-sury.list
+    fi
+    apt-get update -y
+}
+
+detect_php_fpm_socket() {
+    if [ -S /run/php/php8.3-fpm.sock ]; then
+        PHP_FPM_SOCK="/run/php/php8.3-fpm.sock"
+        return
+    fi
+    PHP_FPM_SOCK="$(ls -1 /run/php/php*-fpm.sock 2>/dev/null | head -n 1 || true)"
+    if [ -z "$PHP_FPM_SOCK" ]; then
+        echo -e "${RED}[ERROR] PHP-FPM socket tidak ditemukan di /run/php/.${NC}"
+        exit 1
+    fi
+}
+
+detect_yarn_build_script() {
+    node -e "const s=require('./package.json').scripts||{}; const c=['build:production','production','build']; for (const k of c){ if (s[k]){ process.stdout.write(k); process.exit(0);} } process.exit(1);" 2>/dev/null || true
+}
+
+node_major_version() {
+    node -p "process.versions.node.split('.')[0]" 2>/dev/null || true
+}
+
+install_nodejs_major() {
+    local major="$1"
+    curl -fsSL "https://deb.nodesource.com/setup_${major}.x" | bash -
+    apt-get update -y
+    apt_install nodejs
+}
+
+ensure_supported_nodejs() {
+    local current_major
+    current_major="$(node_major_version)"
+    if [ -n "$current_major" ] && [ "$current_major" -ge 18 ]; then
+        return
+    fi
+    local majors=(20 18)
+    for m in "${majors[@]}"; do
+        if install_nodejs_major "$m" >/dev/null 2>&1; then
+            current_major="$(node_major_version)"
+            if [ -n "$current_major" ] && [ "$current_major" -ge 18 ]; then
+                return
+            fi
+        fi
+    done
+    echo -e "${RED}[ERROR] Gagal memasang Node.js versi kompatibel (butuh >= 18).${NC}"
+    exit 1
+}
+
+install_composer_secure() {
+    local expected actual
+    expected="$(curl -fsSL https://composer.github.io/installer.sig)"
+    php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+    actual="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
+    if [ "$expected" != "$actual" ]; then
+        rm -f composer-setup.php
+        echo -e "${RED}[ERROR] Verifikasi installer Composer gagal.${NC}"
+        exit 1
+    fi
+    php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+    rm -f composer-setup.php
+}
+
 # 1. Install Dependencies
 echo -e "${GREEN}[+] Menginstall System Dependencies...${NC}"
-apt update -y
-apt install -y software-properties-common curl apt-transport-https ca-certificates gnupg cron git unzip tar
+ensure_debian_like
+apt-get update -y
+ensure_packages software-properties-common curl apt-transport-https ca-certificates gnupg cron git unzip tar
 
 # Install PHP 8.3 & Extensions
 echo -e "${GREEN}[+] Menginstall PHP 8.3...${NC}"
-LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
-apt update -y
-apt install -y php8.3 php8.3-{cli,common,gd,mysql,mbstring,bcmath,xml,fpm,curl,zip} mariadb-server nginx
+ensure_php_repo
+ensure_packages nginx mariadb-server redis-server php8.3 php8.3-cli php8.3-common php8.3-gd php8.3-mysql php8.3-mbstring php8.3-bcmath php8.3-xml php8.3-fpm php8.3-curl php8.3-zip
+ensure_service_started mariadb
+ensure_service_started redis-server
+ensure_service_started nginx
+ensure_service_started php8.3-fpm || true
+detect_php_fpm_socket
 
 # Install Node.js & Yarn (Untuk Build Assets jika diperlukan)
 echo -e "${GREEN}[+] Menginstall Node.js & Yarn...${NC}"
-curl -sL https://deb.nodesource.com/setup_18.x | bash -
-apt install -y nodejs
-npm install -g yarn
+if ! command_exists node; then
+    ensure_supported_nodejs
+else
+    ensure_supported_nodejs
+fi
+ensure_packages npm
+if ! command_exists yarn; then
+    if command_exists corepack; then
+        corepack enable || true
+        corepack prepare yarn@stable --activate || true
+    fi
+fi
+if ! command_exists yarn; then
+    npm install -g yarn
+fi
 
 # Install Composer
 echo -e "${GREEN}[+] Menginstall Composer...${NC}"
-curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+if [ ! -x /usr/local/bin/composer ]; then
+    install_composer_secure
+fi
 
 # 2. Setup Database
 echo -e "${GREEN}[+] Setup Database MariaDB...${NC}"
@@ -123,12 +258,19 @@ export COMPOSER_ALLOW_SUPERUSER=1
 if [ -f "package.json" ]; then
     echo -e "${GREEN}[+] Mendeteksi package.json, melakukan build assets...${NC}"
     yarn install
-    yarn build:production
+    BUILD_SCRIPT="$(detect_yarn_build_script)"
+    if [ -n "$BUILD_SCRIPT" ]; then
+        yarn run "$BUILD_SCRIPT"
+    else
+        yarn run build || true
+    fi
 fi
 
 # 5. Environment Setup
 echo -e "${GREEN}[+] Konfigurasi .env...${NC}"
-cp .env.example .env
+if [ ! -f .env ]; then
+    cp .env.example .env
+fi
 php artisan key:generate --force
 
 # Update .env programmatically
@@ -183,7 +325,7 @@ server {
 
     location ~ \.php$ {
         fastcgi_split_path_info ^(.+\.php)(/.+)$;
-        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_pass unix:${PHP_FPM_SOCK};
         fastcgi_index index.php;
         include fastcgi_params;
         fastcgi_param PHP_VALUE "upload_max_filesize = 100M \n post_max_size=100M";
@@ -233,12 +375,19 @@ systemctl enable --now reviactyl
 echo -e "${GREEN}[+] Setup Auto Update...${NC}"
 cat > /var/www/reviactyl/auto_update.sh <<EOF
 #!/bin/bash
+set -e
 cd /var/www/reviactyl
 git pull origin main
-composer install --no-dev --optimize-autoloader
+export COMPOSER_ALLOW_SUPERUSER=1
+/usr/local/bin/composer install --no-dev --optimize-autoloader --no-interaction
 if [ -f "package.json" ]; then
     yarn install
-    yarn build:production
+    BUILD_SCRIPT="\$(node -e \"const s=require('./package.json').scripts||{}; const c=['build:production','production','build']; for (const k of c){ if (s[k]){ process.stdout.write(k); process.exit(0);} } process.exit(1);\" 2>/dev/null || true)"
+    if [ -n "\$BUILD_SCRIPT" ]; then
+        yarn run "\$BUILD_SCRIPT"
+    else
+        yarn run build || true
+    fi
 fi
 php artisan migrate --force
 php artisan view:clear

@@ -112,7 +112,12 @@ fi
 
 # 4. Install Project Dependencies
 echo -e "${GREEN}[+] Installing Composer Dependencies...${NC}"
-composer install --no-dev --optimize-autoloader
+if [ ! -f "composer.json" ]; then
+    echo -e "${RED}[ERROR] composer.json tidak ditemukan di /var/www/reviactyl${NC}"
+    exit 1
+fi
+export COMPOSER_ALLOW_SUPERUSER=1
+/usr/local/bin/composer install --no-dev --optimize-autoloader --no-interaction
 
 # Build Assets if package.json exists
 if [ -f "package.json" ]; then
